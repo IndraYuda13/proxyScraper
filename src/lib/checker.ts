@@ -156,13 +156,8 @@ export async function checkAndSaveProxies(proxies: ProxyItem[]) {
   let isStopped = false;
 
   for (const p of uniqueProxies) {
-    if (processed % 100 === 0) {
-      const status = await getStatus();
-      if (status?.should_stop) {
-        await logMessage('Stop signal detected. Aborting checking process.', 'warn');
-        isStopped = true;
-        break;
-      }
+    if (isStopped) {
+      break;
     }
 
     const task = testProxy(p.ip, p.port, p.protocol, timeout, targetUrl).then(async testResult => {
@@ -205,7 +200,7 @@ export async function checkAndSaveProxies(proxies: ProxyItem[]) {
     }).catch(() => {
     }).finally(() => {
       processed++;
-      if (processed % 50 === 0 && !isStopped) {
+      if (processed % 50 === 0) {
         getDb().then(database => {
           database.get('SELECT COUNT(*) as count FROM proxies WHERE status = "active"').then((row: any) => {
             updateStatus({ verified_live: row?.count || 0 }).catch(() => {});
@@ -219,14 +214,19 @@ export async function checkAndSaveProxies(proxies: ProxyItem[]) {
 
     if (activePromises.size >= concurrencyLimit) {
       await Promise.race(activePromises);
+      
+      // Asynchronously fetch status when concurrency limit is reached to check for stop signal
+      const status = await getStatus();
+      if (status?.should_stop) {
+        await logMessage('Stop signal detected. Aborting checking process.', 'warn');
+        isStopped = true;
+        break;
+      }
     }
   }
 
-  if (isStopped) {
-    activePromises.clear();
-  } else {
-    await Promise.all(activePromises);
-  }
+  // Await any remaining active in-flight promises before finishing, preventing SQLite locks
+  await Promise.all(activePromises).catch(() => {});
 
   const liveInDb = await db.get('SELECT COUNT(*) as count FROM proxies WHERE status = "active"');
   await updateStatus({ verified_live: liveInDb?.count || 0 });
