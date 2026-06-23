@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getDb, getStatus, getSourceStats, updateStatus, resetDatabase } from '@/lib/db';
-import { runScraperCycle } from '@/lib/scraper';
+import { runScraperCycle, cancelActiveSearch } from '@/lib/scraper';
 
 export async function GET() {
   const db = await getDb();
@@ -14,6 +14,7 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   if (body.action === 'stop') {
     await updateStatus({ should_stop: true, current_step: 'Stopping...' });
+    cancelActiveSearch();
     return NextResponse.json({ status: 'stopping' });
   }
   if (body.action === 'reset') {

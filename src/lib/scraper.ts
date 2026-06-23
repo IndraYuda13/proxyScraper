@@ -7,6 +7,15 @@ import { updateStatus, getStatus, updateSourceStat, logMessage } from './db';
 const SEARXNG_ENDPOINT = 'https://9router.indrayuda.my.id/v1/search';
 const SEARXNG_KEY = 'sk-68b631cc8464b3ed-tbnd2g-cc2ff8e3';
 
+let currentSearchAbortController: AbortController | null = null;
+
+export function cancelActiveSearch() {
+  if (currentSearchAbortController) {
+    currentSearchAbortController.abort();
+    currentSearchAbortController = null;
+  }
+}
+
 async function checkStopSignal(): Promise<boolean> {
   const status = await getStatus();
   return !!status?.should_stop;
@@ -64,6 +73,7 @@ async function searchProxyUrls(): Promise<string[]> {
       break;
     }
     try {
+      currentSearchAbortController = new AbortController();
       const res = await axios.post(SEARXNG_ENDPOINT, {
         model: 'searxng',
         query: q,
@@ -74,9 +84,11 @@ async function searchProxyUrls(): Promise<string[]> {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${SEARXNG_KEY}`
         },
+        signal: currentSearchAbortController.signal,
         timeout: 10000
       });
 
+      currentSearchAbortController = null;
       const results = res.data?.results || [];
       for (const item of results) {
         if (item.url && item.url.startsWith('http')) {
@@ -84,7 +96,12 @@ async function searchProxyUrls(): Promise<string[]> {
         }
       }
     } catch (e: any) {
-      await logMessage(`SearXNG search failed for query "${q}": ${e.response?.data || e.message}`, 'error');
+      currentSearchAbortController = null;
+      if (axios.isCancel(e) || e.name === 'CanceledError') {
+        await logMessage(`SearXNG search request canceled for query "${q}"`, 'warn');
+      } else {
+        await logMessage(`SearXNG search failed for query "${q}": ${e.response?.data || e.message}`, 'error');
+      }
     }
     searchCount++;
     await updateStatus({ scanned_urls: urls.size, current_step: `Web Search: SearXNG ${searchCount}/${queries.length} queries` });
